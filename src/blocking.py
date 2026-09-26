@@ -17,9 +17,12 @@ def build_s1_index(s1: pl.DataFrame, chunk: int = 100000):
     return k1.select("key", pl.col("rid").alias("s1"), "w", "df", "kind")
 
 
+OUT_SCHEMA = {"rid": pl.UInt32, "s1": pl.UInt32, "bscore": pl.Float32, "nkeys": pl.UInt16, "brank": pl.UInt16, "btop": pl.Float32}
+
+
 def query(o: pl.DataFrame, idx: pl.DataFrame, topk: int = 20, chunk: int = 200000, rel: float = 0.0):
     """o must have rid (u32), atoks.  Returns (rid, s1, bscore, nkeys, brank, btop)."""
-    out = []
+    out = [pl.DataFrame(schema=OUT_SCHEMA)]
     capx = pl.col("kind").replace_strict(CAPS, return_dtype=pl.Int32)
     capn = pl.col("kind").replace_strict(CAPS_NOADDR, return_dtype=pl.Int32)
     n = o.height if isinstance(o, pl.DataFrame) else o.select(pl.len()).collect().item()
@@ -33,8 +36,10 @@ def query(o: pl.DataFrame, idx: pl.DataFrame, topk: int = 20, chunk: int = 20000
         j = k2.select("rid", "key", "na").join(idx, on="key")
         j = j.filter(pl.col("df") <= pl.when(pl.col("na")).then(capn).otherwise(capx))
         sc = j.group_by(["rid", "s1"]).agg(pl.col("w").sum().alias("bscore"), pl.len().alias("nkeys"))
+        # fixed row order so ties in bscore are broken by s1 id (group_by order is not deterministic)
+        sc = sc.sort(["rid", "bscore", "s1"], descending=[False, True, False])
         sc = sc.with_columns(pl.col("bscore").rank("ordinal", descending=True).over("rid").alias("brank"),
                              pl.col("bscore").max().over("rid").alias("btop"))
         out.append(sc.filter((pl.col("brank") <= topk) & (pl.col("bscore") >= rel * pl.col("btop")))
-                   .with_columns(pl.col("brank").cast(pl.UInt16), pl.col("nkeys").cast(pl.UInt16)))
+                   .select([pl.col(c).cast(t) for c, t in OUT_SCHEMA.items()]))
     return pl.concat(out)

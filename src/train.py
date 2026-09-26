@@ -10,6 +10,7 @@ import polars as pl
 import lightgbm as lgb
 from metrics import macro_f05
 from features import add_rank_feats, BREL_MIN
+from common import NTHREADS
 
 W = sys.argv[1]
 DROP = {"rid", "s1", "label", "true_s1", "brank", "p"}
@@ -62,7 +63,7 @@ if __name__ == "__main__":
     Xe, ye = load_np(parts_val[::12], cols)
     print("train pairs", len(y), "pos", int(y.sum()), "es pairs", len(ye), "features", len(cols), flush=True)
     params = dict(objective="binary", learning_rate=0.08, num_leaves=255, min_data_in_leaf=200, feature_fraction=0.7,
-                  bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, num_threads=2, verbose=-1, max_bin=255)
+                  bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, num_threads=NTHREADS, verbose=-1, max_bin=255)
     dtr = lgb.Dataset(X, label=y, feature_name=cols, free_raw_data=True).construct()
     del X
     dva = lgb.Dataset(Xe, label=ye, reference=dtr)

@@ -11,6 +11,7 @@ import sys, time, gc, os, glob
 import numpy as np
 import polars as pl
 from features import compute_features, token_idf, REC_COLS
+from common import safe
 
 split, W = sys.argv[1], sys.argv[2]
 N_TRAIN_Q = int(os.environ.get("N_TRAIN_Q", "2000000"))
@@ -36,6 +37,9 @@ print("idf ready", f"{time.time()-t0:.0f}s", flush=True)
 
 
 def run(pairs, out_path, label_map=None):
+    if pairs.height == 0:
+        print("  no pairs for", out_path, flush=True)
+        return None
     pairs = pairs.sort("rid")
     rids = pairs["rid"].unique().sort()
     parts = []
@@ -53,7 +57,8 @@ def run(pairs, out_path, label_map=None):
     for bi in range(len(bounds) - 1):
         lo, hi = rr[bounds[bi]], rr[bounds[bi + 1] - 1]
         pc = pairs.filter((pl.col("rid") >= lo) & (pl.col("rid") <= hi))
-        f = compute_features(pc, q.filter(pl.col("rid").is_in(pc["rid"].unique())), s1.filter(pl.col("rid").is_in(pc["s1"].unique())), name_idf, addr_idf)
+        f = compute_features(pc, q.filter(pl.col("rid").is_in(pc["rid"].unique().implode())),
+                             s1.filter(pl.col("rid").is_in(pc["s1"].unique().implode())), name_idf, addr_idf)
         if label_map is not None:
             f = f.join(label_map, on="rid", how="left").with_columns((pl.col("true_s1") == pl.col("s1")).fill_null(False).cast(pl.Int8).alias("label"))
         f = f.with_columns([pl.col(c).cast(pl.Float32) for c, dt in f.schema.items() if dt == pl.Float64])
@@ -88,7 +93,7 @@ elif split == "train":
     gt = (gt.with_columns(pl.col("matched_entity_ids").str.split(",").alias("m")).explode("m").filter(pl.col("m") != "")
           .join(s1.select(pl.col("entity_id").alias("source1_entity_id"), pl.col("rid").alias("true_s1")), on="source1_entity_id")
           .join(pl.read_parquet(f"{W}/{split}_q.parquet", columns=["entity_id", "rid"]).rename({"entity_id": "m"}), on="m").select("rid", "true_s1"))
-    # hold-out: 5% of Source-1 entities
+    # hold-out: 3% of Source-1 entities
     s1v = s1.filter((pl.col("entity_id").hash(seed=42) % 100) < 3).select(pl.col("rid").alias("s1"))
     s1v.write_parquet(f"{W}/val_s1.parquet")
     qv = cand.filter(pl.col("bscore") >= 0.3 * pl.col("btop")).join(s1v, on="s1").select("rid").unique()
@@ -105,12 +110,15 @@ else:
     del cand, s1
     gc.collect()
     for country in pl.scan_parquet(f"{W}/{split}_s1.parquet").select(pl.col("country").unique()).collect()["country"].to_list():
-        cand = (pl.scan_parquet(f"{W}/{split}_cand_{country}.parquet").select(["rid", "s1", "bscore", "nkeys", "brank", "btop"])
+        cp = f"{W}/{split}_cand_{safe(country)}.parquet"
+        if not os.path.exists(cp):
+            print(country, "no candidate file (no Source-2/3 records?)", flush=True); continue
+        cand = (pl.scan_parquet(cp).select(["rid", "s1", "bscore", "nkeys", "brank", "btop"])
                 .filter(pl.col("bscore") >= 0.3 * pl.col("btop")).collect())
         s1 = pl.scan_parquet(f"{W}/{split}_s1.parquet").filter(pl.col("country") == country).select(REC_COLS).collect()
         q = pl.scan_parquet(f"{W}/{split}_q.parquet").filter(pl.col("country") == country).select(REC_COLS).collect()
         print(country, "pairs", cand.height, flush=True)
-        run(cand, f"{W}/feat/test_{country}.parquet")
+        run(cand, f"{W}/feat/test_{safe(country)}.parquet")
         del cand, s1, q
         gc.collect()
 print("done", f"{time.time()-t0:.0f}s")

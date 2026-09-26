@@ -3,11 +3,12 @@ import numpy as np
 import polars as pl
 from rapidfuzz import process, fuzz
 from rapidfuzz.distance import JaroWinkler
+from common import NTHREADS
 
 LEGAL = ["pvt", "ltd", "corp", "inc", "co", "llc", "llp", "lp", "plc", "pc", "pllc", "sarl", "sas", "sasu",
          "eurl", "sa", "ei", "sci", "snc", "scop", "selarl", "opc"]
 REC_COLS = ["rid", "country", "nfull", "ncore", "nalt", "is_domain", "is_dba", "is_native", "atoks", "anums",
-            "state", "pin", "acity"]
+            "state", "pin", "acity", "pcode", "hnum", "nskel"]
 
 
 def token_idf(frames, col, country_col="country"):
@@ -20,7 +21,7 @@ def token_idf(frames, col, country_col="country"):
     return df.select(country_col, "tok", "idf", "df")
 
 
-def _cp(a, b, scorer, workers=2):
+def _cp(a, b, scorer, workers=NTHREADS):
     return process.cpdist(a, b, scorer=scorer, workers=workers, dtype=np.float32)
 
 
@@ -45,6 +46,12 @@ def _weighted_overlap(p: pl.DataFrame, qcol: str, scol: str, idf: pl.DataFrame, 
 
 
 BREL_MIN = 0.3
+
+
+def _ints(c):
+    """space separated digit string -> unique list of Int64 (values that overflow are dropped)"""
+    return (pl.col(c).str.split(" ").list.eval(pl.element().filter(pl.element() != "").cast(pl.Int64, strict=False).drop_nulls())
+            .list.unique())
 
 
 def add_rank_feats(df: pl.DataFrame) -> pl.DataFrame:
@@ -88,7 +95,11 @@ def compute_features(pairs: pl.DataFrame, q: pl.DataFrame, s1: pl.DataFrame, nam
     F["city_tset"] = _cp([x.replace("|", " ") for x in qc_], [x.replace("|", " ") for x in sc_], fuzz.token_set_ratio)
     # last city component (usually the city)
     F["city_last"] = _cp([x.split("|")[-1] if x else "" for x in qc_], [x.split("|")[-1] if x else "" for x in sc_], fuzz.ratio)
-    del qn, sn, qf, sf, qa, sa, qalt, qcc, scc, qc_, sc_
+    # typo-tolerant name similarity on consonant skeletons ("Beeacon Enetrprises" ~ "Beacon Enterprises")
+    qk, sk = p["q_nskel"].to_list(), p["s_nskel"].to_list()
+    F["nskel_tset"] = _cp(qk, sk, fuzz.token_set_ratio)
+    F["nskel_tsort"] = _cp(qk, sk, fuzz.token_sort_ratio)
+    del qn, sn, qf, sf, qa, sa, qalt, qcc, scc, qc_, sc_, qk, sk
     feats = pl.DataFrame({k: v for k, v in F.items()})
     del F
     # --- set based features (polars) ---
@@ -99,6 +110,8 @@ def compute_features(pairs: pl.DataFrame, q: pl.DataFrame, s1: pl.DataFrame, nam
         pl.col("q_anums").str.split(" ").list.first().alias("qm1"), pl.col("s_anums").str.split(" ").list.first().alias("sm1"),
         pl.col("q_state"), pl.col("s_state"), pl.col("q_pin"), pl.col("s_pin"),
         pl.col("q_ncore").str.split(" ").list.first().alias("qn1"), pl.col("s_ncore").str.split(" ").list.first().alias("sn1"),
+        pl.col("q_pcode"), pl.col("s_pcode"), pl.col("q_hnum"), pl.col("s_hnum"),
+        _ints("q_anums").alias("qmi"), _ints("s_anums").alias("smi"),
     )
     s = s.with_columns(
         pl.col("qf").list.eval(pl.element().filter(pl.element().is_in(LEGAL))).alias("ql"),
@@ -116,6 +129,15 @@ def compute_features(pairs: pl.DataFrame, q: pl.DataFrame, s1: pl.DataFrame, nam
         pl.when((lens("ql") == 0) | (lens("sl") == 0)).then(-1)
           .when(pl.col("ql").list.sort().list.join(" ") == pl.col("sl").list.sort().list.join(" ")).then(1)
           .when(inter("ql", "sl") > 0).then(2).otherwise(0).cast(pl.Int8).alias("legal_eq"),
+        tri("q_pcode", "s_pcode").alias("pcode_eq"), tri("q_hnum", "s_hnum").alias("hnum_eq"),
+        # signed house-number offset (record - Source 1).  Lookalike "decoy" businesses sit at the same
+        # street with a shifted number, while true-match number noise is small and symmetric.
+        (pl.col("q_hnum").cast(pl.Int64, strict=False) - pl.col("s_hnum").cast(pl.Int64, strict=False)).cast(pl.Float32).alias("hnum_diff"),
+        # when exactly one address number differs on each side: its signed offset (plot / door numbers)
+        pl.when((pl.col("qmi").list.set_difference(pl.col("smi")).list.len() == 1)
+                & (pl.col("smi").list.set_difference(pl.col("qmi")).list.len() == 1))
+          .then(pl.col("qmi").list.set_difference(pl.col("smi")).list.first() - pl.col("smi").list.set_difference(pl.col("qmi")).list.first())
+          .otherwise(None).cast(pl.Float32).alias("num_only_diff"),
     )
     s2 = s2.with_columns(
         (pl.col("n_inter") / (pl.col("qn_len") + pl.col("sn_len") - pl.col("n_inter")).clip(lower_bound=1)).alias("n_jac"),
@@ -144,6 +166,7 @@ def compute_features(pairs: pl.DataFrame, q: pl.DataFrame, s1: pl.DataFrame, nam
         pl.col("a_tset").rank("max", descending=True).over("rid").alias("a_tset_rank"),
         (pl.col("wn_wj") + pl.col("wa_wj")).alias("w_sum"),
     )
+    out = out.with_columns((pl.col("hnum_diff").abs()).alias("hnum_absdiff"))
     out = out.with_columns(
         pl.col("w_sum").rank("max", descending=True).over("rid").alias("w_sum_rank"),
         (pl.col("w_sum") - pl.col("w_sum").max().over("rid")).alias("w_sum_gap"),

@@ -6,6 +6,9 @@ All keys are scoped by country and hashed to u64.  Key kinds:
   2 AA : address number x address word / word pair  (address only - catches alias/DBA names)
   3 F  : full sorted core name
   4 T  : single core-name token (or 6-char prefix of concatenated name)
+  5 SA : consonant skeleton of a name token x address token   (typo-tolerant NA: "Shiav" ~ "Shiva")
+  6 SS : pair of name-token skeletons                          (typo-tolerant NN, also works without address)
+Address tokens include the postal code of every country (US ZIP, Indian PIN, French code postal ...).
 Each kind has its own document-frequency cap (see CAPS); keys whose Source-1
 frequency exceeds the cap are dropped as non-selective.
 """
@@ -20,9 +23,9 @@ ADDR_GENERIC = ["st", "rd", "ave", "dr", "blvd", "ln", "ct", "pl", "sq", "hwy", 
 MAX_NT = 4
 MAX_NUM = 3
 MAX_ALPHA = 9
-CAPS = {0: 50, 1: 50, 2: 30, 3: 50, 4: 20}
+CAPS = {0: 50, 1: 50, 2: 30, 3: 50, 4: 20, 5: 30, 6: 30}
 # caps used for query records that have no usable address (name-only retrieval)
-CAPS_NOADDR = {0: 50, 1: 300, 2: 30, 3: 300, 4: 300}
+CAPS_NOADDR = {0: 50, 1: 300, 2: 30, 3: 300, 4: 300, 5: 30, 6: 150}
 S1_MAXCAP = 300
 
 EMPTY = pl.lit([], dtype=pl.List(pl.Utf8))
@@ -41,9 +44,12 @@ def token_lists(df: pl.DataFrame) -> pl.DataFrame:
     nums = toks.list.eval(pl.element().filter(pl.element().str.contains(r"^\d+$"))).list.head(MAX_NUM)
     alph = (toks.list.eval(pl.element().filter(~pl.element().str.contains(r"^\d+$") & (pl.element().str.len_chars() >= 3)))
             .list.eval(pl.element().sort_by(pl.element().str.len_chars(), descending=True, maintain_order=True)).list.head(MAX_ALPHA))
-    pin = pl.when(pl.col("pin") != "").then(pl.concat_list([pl.lit("pin") + pl.col("pin")])).otherwise(EMPTY)
+    code = pl.col("pcode") if "pcode" in df.columns else pl.col("pin")
+    pin = pl.when(code != "").then(pl.concat_list([pl.lit("pin") + code])).otherwise(EMPTY)
+    sk = (pl.col("nskel") if "nskel" in df.columns else pl.lit("")).str.split(" ")
+    sk = sk.list.eval(pl.element().filter(pl.element().str.len_chars() >= 2)).list.unique(maintain_order=True).list.head(MAX_NT)
     return df.select("rid", "country", nt.alias("nt"), pref.alias("pref"), nums.alias("nums"), alph.alias("alph"), pin.alias("pin"),
-                     pl.col("ncore").str.split(" ").list.sort().list.join(" ").alias("fk"))
+                     pl.col("ncore").str.split(" ").list.sort().list.join(" ").alias("fk"), sk.alias("sk"))
 
 
 def _h(col, country, seed):
@@ -69,7 +75,11 @@ def make_keys(df: pl.DataFrame) -> pl.DataFrame:
     aa = pl.concat([aa1, aa2]).with_columns(pl.lit(2, pl.Int8).alias("kind"))
     f = tl.filter(pl.col("fk") != "").select("rid", (pl.col("country") + "|F|" + pl.col("fk")).hash(seed=5).alias("key"), pl.lit(3, pl.Int8).alias("kind"))
     t = n.select("rid", pl.col("th").alias("key"), pl.lit(4, pl.Int8).alias("kind"))
-    out = pl.concat([na, nn, aa, f, t]).unique(["rid", "key"])
+    sk = tl.select("rid", "country", "sk").explode("sk").drop_nulls("sk").select("rid", _h("sk", None, 6).alias("kh"), pl.col("sk"))
+    sa = sk.join(a, on="rid").select("rid", (pl.col("kh") ^ (pl.col("ah") // 32) ^ 0x5BD1E9955BD1E995).alias("key"), pl.lit(5, pl.Int8).alias("kind"))
+    ss = (sk.join(sk, on="rid", suffix="2").filter(pl.col("sk") < pl.col("sk2"))
+          .select("rid", (pl.col("kh") ^ (pl.col("kh2") // 64) ^ 0x2545F4914F6CDD1D).alias("key"), pl.lit(6, pl.Int8).alias("kind")))
+    out = pl.concat([na, nn, aa, f, t, sa, ss]).unique(["rid", "key"])
     return out.with_columns(pl.col("rid").cast(pl.UInt32))
 
 

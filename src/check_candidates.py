@@ -5,7 +5,8 @@ out, test_dir = sys.argv[1], sys.argv[2]
 sc = lambda p: pl.scan_csv(p, separator="\t", quote_char=None, infer_schema=False).with_columns(pl.all().fill_null(""))
 c = sc(f"{out}/candidate_pairs.tsv"); m = sc(f"{out}/matching_results.tsv")
 assert c.collect_schema().names() == ["source1_entity_id", "candidate_entity_ids"]
-s1 = pl.scan_csv(f"{test_dir}/test_source1.tsv", separator="\t", quote_char=None, infer_schema=False).select(pl.col("entity_id").alias("source1_entity_id"))
+s1 = (pl.scan_csv(f"{test_dir}/test_source1.tsv", separator="\t", quote_char=None, infer_schema=False, truncate_ragged_lines=True)
+      .select(pl.nth(0).str.strip_chars().alias("source1_entity_id")).filter(pl.col("source1_entity_id").fill_null("") != "").unique())
 ids = c.select("source1_entity_id").collect()
 n_s1 = s1.select(pl.len()).collect().item()
 assert ids.height == n_s1 and ids["source1_entity_id"].n_unique() == n_s1, "row count / duplicate rows"

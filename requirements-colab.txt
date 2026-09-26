@@ -1,0 +1,4 @@
+# Colab: numpy and pyarrow are preinstalled and are left alone (reinstalling them forces a runtime restart).
+polars==1.44.2
+lightgbm==4.7.0
+rapidfuzz==3.14.6

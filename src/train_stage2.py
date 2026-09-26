@@ -9,6 +9,7 @@ import polars as pl
 import lightgbm as lgb
 import stage2
 from train import read_part
+from common import NTHREADS
 from metrics import macro_f05
 
 W = sys.argv[1]
@@ -51,7 +52,7 @@ if __name__ == "__main__":
     Vv = V.join(s1V, on="s1")
     cols = s2_cols(Tt)
     params = dict(objective="binary", learning_rate=0.03, num_leaves=63, min_data_in_leaf=100, feature_fraction=0.7,
-                  bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, num_threads=2, verbose=-1)
+                  bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, num_threads=NTHREADS, verbose=-1)
     ROUNDS = int(sys.argv[2]) if len(sys.argv) > 2 else 800
 
     def fit(df):

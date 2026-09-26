@@ -13,6 +13,8 @@ import numpy as np
 import polars as pl
 import lightgbm as lgb
 import stage2
+import decision
+from common import safe, NTHREADS
 from train import read_part, feat_cols, DROP
 from metrics import macro_f05
 
@@ -62,7 +64,7 @@ def stage1(home):
     cols = feat_cols(read_part(parts_of("train_trn")[0]))
     cols = [c for c in cols if c != "fold"]
     params = dict(objective="binary", learning_rate=0.08, num_leaves=255, min_data_in_leaf=200, feature_fraction=0.7,
-                  bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, num_threads=2, verbose=-1, max_bin=255)
+                  bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, num_threads=NTHREADS, verbose=-1, max_bin=255)
     models = []
     for k in (0, 1):
         # training queries of fold k (outside V), sampled to fit memory
@@ -97,7 +99,7 @@ def stage1(home):
         for k in (0, 1):
             msk = (d["fold"] == (1 - k)).to_numpy()   # scored by the model that did NOT train on this fold
             if msk.any():
-                p[msk] = models[k].predict(d.filter(pl.Series(msk)).select(cols).to_numpy().astype(np.float32), num_threads=2)
+                p[msk] = models[k].predict(d.filter(pl.Series(msk)).select(cols).to_numpy().astype(np.float32), num_threads=NTHREADS)
         res.append(d.select("rid", "s1", "label", "a_tset", "nf_tset").with_columns(pl.Series("p1", p)))
     oof = pl.concat(res)
     oof.write_parquet(f"{W}/oof_p1.parquet")
@@ -109,17 +111,21 @@ def stage2_train(home):
     s1dups = stage2.s1_duplicates(s1); del s1
     qV = home.filter(pl.col("home") == "train_val").select("rid")
     s1V = pl.read_parquet(f"{W}/val_s1.parquet")
-    for c in ("US", "India"):
-        pth = f"{W}/cf_best_{c}.parquet"
+    countries = pl.scan_parquet(f"{W}/train_q.parquet").select(pl.col("country").unique()).collect()["country"].to_list()
+    for c in countries:
+        pth = f"{W}/cf_best_{safe(c)}.parquet"
         if os.path.exists(pth):
             continue
         qtext = pl.scan_parquet(f"{W}/train_q.parquet").filter(pl.col("country") == c).select("rid", "entity_id", "ncore", "atoks", "anums").collect()
         o = pl.scan_parquet(f"{W}/oof_p1.parquet").join(qtext.select("rid").lazy(), on="rid").collect()
+        if o.height == 0:
+            continue
         b = stage2.build(o.select("rid", "s1", "p1"), qtext, o.select("rid", "s1", "a_tset", "nf_tset"), s1dups)
         b.write_parquet(pth)
         del qtext, o, b; gc.collect()
         log("context", c)
-    best = pl.concat([pl.read_parquet(f"{W}/cf_best_{c}.parquet") for c in ("US", "India")], how="diagonal_relaxed")
+    best = pl.concat([pl.read_parquet(p) for c in countries if os.path.exists(p := f"{W}/cf_best_{safe(c)}.parquet")],
+                     how="diagonal_relaxed")
     # rows used: V rows (evaluation, s1 in V) + a sample of non-V queries for training
     Vkeys = best.join(qV, on="rid").join(s1V, on="s1").select("rid", "s1")
     Tr = best.join(qV, on="rid", how="anti").filter(pl.col("p1") >= 0.02)
@@ -139,7 +145,7 @@ def stage2_train(home):
     tr = tr.with_columns((pl.col("rid").hash(seed=3) % 20 == 0).alias("_es"))
     es = tr.filter(pl.col("_es")); tr = tr.filter(~pl.col("_es"))
     params = dict(objective="binary", learning_rate=0.05, num_leaves=127, min_data_in_leaf=200, feature_fraction=0.7,
-                  bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, num_threads=2, verbose=-1)
+                  bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, num_threads=NTHREADS, verbose=-1)
     dtr = lgb.Dataset(tr.select(cols).to_numpy().astype(np.float32), label=tr["label"].to_numpy(), feature_name=cols, free_raw_data=True)
     dva = lgb.Dataset(es.select(cols).to_numpy().astype(np.float32), label=es["label"].to_numpy(), reference=dtr)
     del tr, es; gc.collect()
@@ -156,9 +162,26 @@ def stage2_train(home):
         best_thr = max(best_thr, (f, float(thr)))
     f1 = max(macro_f05(va.filter(pl.col("p1") >= t).select("s1", "rid"), gt, s1V) for t in (0.6, 0.65, 0.7, 0.75))
     log("BEST stage2", best_thr, "stage1-only (oof)", f1)
+    # ---- decision policy on V: fixed threshold vs per-entity expected-F0.5 selection, with and
+    # without the house-number decoy guard.  The configuration with the best macro F0.5 on V is kept.
+    vp = va.filter(pl.col("p1") >= 0.02).select("s1", "rid", "p2")
+    hq = pl.read_parquet(f"{W}/train_q.parquet", columns=["rid", "hnum", "country"])
+    hs = pl.read_parquet(f"{W}/train_s1.parquet", columns=["rid", "hnum"]).rename({"rid": "s1"})
+    configs = [("threshold", best_thr[1], 1.0)] + [("expected_f", best_thr[1], pw) for pw in (0.8, 1.0, 1.25, 1.5)]
+    results = []
+    for pol, thr, pw in configs:
+        acc = decision.select(vp, pol, thr, pw)
+        for guard in (False, True):
+            a2 = decision.decoy_guard(acc, hq, hs) if guard else acc
+            f = macro_f05(a2.select("s1", "rid"), gt, s1V)
+            print(f"policy={pol:<10} thr={thr:.3f} power={pw:.2f} decoy_guard={guard!s:<5} F0.5={f:.5f}")
+            results.append((f, pol, thr, pw, guard))
+    f_best, pol, thr, pw, guard = max(results, key=lambda r: r[0])
+    log("BEST decision", f"{f_best:.5f}", pol, thr, pw, guard)
     imp = sorted(zip(cols, m.feature_importance("gain")), key=lambda x: -x[1])
     print([(c, int(g)) for c, g in imp[:25]])
-    json.dump({"cols": cols, "thr": best_thr[1], "val_f05": best_thr[0]}, open(f"{W}/model_stage2_cf.json", "w"))
+    json.dump({"cols": cols, "thr": thr, "val_f05": f_best, "val_f05_threshold_only": best_thr[0], "policy": pol, "power": pw,
+               "decoy_guard": guard, "train_countries": sorted(countries)}, open(f"{W}/model_stage2_cf.json", "w"))
 
 
 if __name__ == "__main__":

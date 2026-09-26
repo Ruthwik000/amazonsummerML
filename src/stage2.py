@@ -12,14 +12,16 @@ candidate x = argmax p1 is kept and stage 2 decides whether to accept (q -> x) u
 import numpy as np
 import polars as pl
 from rapidfuzz import process, fuzz
+from common import NTHREADS
 
 CTX_MIN = 0.3    # a query joins x's context cluster if its best p1 >= CTX_MIN
 MEMBER_MIN = 0.5  # members used for query-query similarity
+MEMBER_MAX = 50   # at most this many (most confident) members per cluster: keeps hub entities linear
 
 
 def best_pairs(pred: pl.DataFrame) -> pl.DataFrame:
     """pred: rid, s1, p1 -> one row per rid with best s1, p1, runner-up p1, #candidates>0.1."""
-    srt = pred.sort(["rid", "p1"], descending=[False, True])
+    srt = pred.sort(["rid", "p1", "s1"], descending=[False, True, False])   # ties -> lowest s1, deterministic
     g = srt.group_by("rid", maintain_order=True).agg(
         pl.col("s1").first().alias("s1"), pl.col("p1").first().alias("p1"),
         pl.col("p1").get(1, null_on_oob=True).fill_null(0.0).alias("p1_2nd"),
@@ -56,7 +58,8 @@ def context_features(best: pl.DataFrame, src: pl.DataFrame) -> pl.DataFrame:
 def qq_features(best: pl.DataFrame, qtext: pl.DataFrame) -> pl.DataFrame:
     """Similarity of each query to the other confident members of its best cluster.
     qtext: rid, ncore, atoks, anums."""
-    mem = best.filter(pl.col("p1") >= MEMBER_MIN).select("s1", pl.col("rid").alias("rid2"))
+    mem = (best.filter(pl.col("p1") >= MEMBER_MIN).sort("p1", descending=True)
+           .group_by("s1", maintain_order=True).head(MEMBER_MAX).select("s1", pl.col("rid").alias("rid2")))
     pr = best.select("rid", "s1").join(mem, on="s1").filter(pl.col("rid") != pl.col("rid2"))
     t1 = qtext.rename({"ncore": "n1", "atoks": "a1", "anums": "m1"})
     t2 = qtext.rename({"rid": "rid2", "ncore": "n2", "atoks": "a2", "anums": "m2"})
@@ -67,8 +70,8 @@ def qq_features(best: pl.DataFrame, qtext: pl.DataFrame) -> pl.DataFrame:
     for i in range(0, pr.height, CH):
         c = pr.slice(i, CH).join(t1, on="rid", how="left").join(t2, on="rid2", how="left")
         c = c.with_columns([pl.col(k).fill_null("") for k in ("n1", "a1", "m1", "n2", "a2", "m2")])
-        ns = process.cpdist(c["n1"].to_list(), c["n2"].to_list(), scorer=fuzz.token_set_ratio, workers=2, dtype=np.float32)
-        as_ = process.cpdist(c["a1"].to_list(), c["a2"].to_list(), scorer=fuzz.token_set_ratio, workers=2, dtype=np.float32)
+        ns = process.cpdist(c["n1"].to_list(), c["n2"].to_list(), scorer=fuzz.token_set_ratio, workers=NTHREADS, dtype=np.float32)
+        as_ = process.cpdist(c["a1"].to_list(), c["a2"].to_list(), scorer=fuzz.token_set_ratio, workers=NTHREADS, dtype=np.float32)
         outs.append(c.select("rid", pl.Series("ns", ns), pl.Series("as", as_),
                              ((pl.col("m1") != "") & (pl.col("m1").str.split(" ").list.first() == pl.col("m2").str.split(" ").list.first())).cast(pl.Float32).alias("meq")))
     pr = pl.concat(outs)
