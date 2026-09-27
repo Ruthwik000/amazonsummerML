@@ -3,6 +3,7 @@
 usage: python build_features.py <split> <work_dir> [mode]
   split=train     : V (3% of Source-1 entities, held out) + 2M random training queries
   split=trainT    : queries touching the T subset (see select_T.py)
+  split=trainT2   : queries touching the T2 subset (see select_T2.py; extra stage-2 training data, v14)
   split=trainRest : every remaining train query (needed for full cross-fitting)
   split=test      : all test candidate pairs, per country
 Features are written in chunks to work/feat/*_partNNNN.parquet
@@ -78,6 +79,12 @@ if split == "trainRest":
         q = pl.scan_parquet(f"{W}/train_q.parquet").select(REC_COLS).join(rb.lazy(), on="rid").collect()
         run(cr.join(rb, on="rid"), f"{W}/feat/train_rest{bi // B}.parquet", gt)
         del q; gc.collect()
+elif split == "trainT2":   # extra stage-2 training subsets: SUB=T2 (default) or T3 ... (select_T2.py)
+    SUB = os.environ.get("SUB", "T2")
+    qt = pl.read_parquet(f"{W}/q{SUB}.parquet")
+    q = pl.scan_parquet(f"{W}/train_q.parquet").select(REC_COLS).join(qt.lazy(), on="rid").collect()
+    gt = pl.read_parquet(f"{W}/train_gt_pairs.parquet")
+    run(cand.join(qt, on="rid"), f"{W}/feat/train_{SUB}.parquet", gt)
 elif split == "trainT":
     qt = pl.read_parquet(f"{W}/qT.parquet")
     q = pl.scan_parquet(f"{W}/train_q.parquet").select(REC_COLS).join(qt.lazy(), on="rid").collect()

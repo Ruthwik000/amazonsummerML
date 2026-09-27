@@ -129,7 +129,7 @@ def ev_select(cand: pl.DataFrame) -> pl.DataFrame:
                  for j in range(r + 1))
         if ev > 0:
             chosen += [(s1_id, x) for x in rids]
-    return pl.DataFrame(chosen, schema=["s1", "rid"], orient="row")
+    return pl.DataFrame(chosen, schema={"s1": cand.schema["s1"], "rid": cand.schema["rid"]}, orient="row")
 
 
 def hidden_offset_rule(keep: pl.DataFrame, s1: pl.DataFrame, min_q: float = 0.5) -> pl.DataFrame:
@@ -163,6 +163,41 @@ def hidden_offset_rule(keep: pl.DataFrame, s1: pl.DataFrame, min_q: float = 0.5)
     return keep.join(sel, on=["s1", "rid"], how="semi")
 
 
+def refit_rules(p: pl.DataFrame, s1: pl.DataFrame, min_q: float = 0.45, min_pos: int = 30) -> pl.DataFrame:
+    """Data-driven version of the offset rules for ANY input matching file (used for v8 = v7 + refit).
+    For every cell (country, strong/weak offset, exact-name?, S1-number confirmed?, offset shared?) the
+    decoy share is estimated on the input itself by the +k/-k symmetry; cells with q >= min_q are
+    removed where the expected per-S1 F0.5 rises."""
+    eq = p.group_by("s1").agg((pl.col("d") == 0).sum().alias("n_eq"), pl.len().alias("m"))
+    x = (p.join(eq, on="s1").join(s1.select(pl.col("entity_id").alias("s1"), full_name("business_name").alias("f1")), on="s1")
+          .with_columns((full_name("business_name") == pl.col("f1")).alias("feq"), (pl.col("n_eq") > 0).alias("conf"),
+                        (pl.col("n_same_d") >= 2).alias("shared")))
+    rows = []
+    for c in x["country"].unique().to_list():
+        for gname, g in (("strong", STRONG), ("weak", WEAK)):
+            for feq in (False, True):
+                for conf in (False, True):
+                    for sh in (False, True):
+                        y = x.filter((pl.col("country") == c) & (pl.col("feq") == feq) & (pl.col("conf") == conf) & (pl.col("shared") == sh))
+                        po = y.filter(pl.col("d").is_in(g)).height
+                        ne = y.filter(pl.col("d").is_in([-k for k in g])).height
+                        if po >= min_pos:
+                            rows.append((c, gname, feq, conf, sh, po, ne, (po - ne) / po))
+    cells = pl.DataFrame(rows, schema=["country", "grp", "feq", "conf", "shared", "pos", "neg", "q"], orient="row")
+    print("refit cells with q >= %.2f:" % min_q)
+    print(cells.filter(pl.col("q") >= min_q))
+    cand = []
+    for r in cells.filter(pl.col("q") >= min_q).iter_rows(named=True):
+        g = STRONG if r["grp"] == "strong" else WEAK
+        cand.append(x.filter((pl.col("country") == r["country"]) & (pl.col("feq") == r["feq"]) & (pl.col("conf") == r["conf"])
+                             & (pl.col("shared") == r["shared"]) & pl.col("d").is_in(g)).with_columns(pl.lit(r["q"]).alias("q")))
+    if not cand:
+        return p.head(0)
+    cand = pl.concat(cand)
+    sel = ev_select(cand.select("s1", "rid", "q", "m"))
+    return p.join(sel, on=["s1", "rid"], how="semi")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--matching", required=True)
@@ -171,6 +206,8 @@ def main():
     ap.add_argument("--removed", default=None)
     ap.add_argument("--extra", action="store_true", help="also apply the v5 classes (expected-F0.5 gated)")
     ap.add_argument("--hidden", action="store_true", help="also remove decoys whose shifted number is not the first one (v6)")
+    ap.add_argument("--refit", action="store_true",
+                    help="skip the fixed v4/v5 rules; estimate every offset cell on the input by symmetry (v8 = v7 --refit --hidden)")
     a = ap.parse_args()
 
     test_dir, train_dir = os.path.join(a.dataset, "test"), os.path.join(a.dataset, "train")
@@ -193,7 +230,7 @@ def main():
     p = p.join(same, on=["s1", "d"], how="left").with_columns(pl.col("n_same_d").fill_null(0))
     rule_a = pl.col("d").is_in(STRONG) & (pl.col("n_same_d") == 1)
     rule_b = pl.col("country").is_in(unlabeled) & pl.col("d").is_in(STRONG + WEAK)
-    removed = p.filter(rule_a | rule_b)
+    removed = refit_rules(p, s1) if a.refit else p.filter(rule_a | rule_b)
     print(f"pairs in: {p.height}, removed: {removed.height}")
     print(removed.group_by("country").len().sort("country"))
 
