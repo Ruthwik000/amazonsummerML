@@ -7,6 +7,7 @@ import os, sys
 import polars as pl
 
 W, OUT = sys.argv[1], sys.argv[2]
+V15 = os.environ.get("V15_DIR", f"{W}/v15")   # folder with the matcher's cross-fit preds + test scores (v16 in run_v17.sh)
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -34,9 +35,9 @@ hard = tr.filter((pl.col("p1") >= 0.02) & (pl.col("p1") <= 0.999))
 easy = tr.filter((pl.col("p1") < 0.02) | (pl.col("p1") > 0.999)).sample(60_000, seed=1)
 xtr = build(pl.concat([hard, easy]).select("rid", "s1", pl.col("label").cast(pl.Int8)), "train").sample(fraction=1.0, shuffle=True, seed=2)
 write(xtr, "xtrain")
-vt = pl.read_parquet(f"{W}/v15/cf_preds_v14_T2.parquet").filter((pl.col("p2") > 0.002) & (pl.col("p2") < 0.998)).select("rid", "s1", pl.col("label").cast(pl.Int8))
+vt = pl.read_parquet(f"{V15}/cf_preds_v14_T2.parquet").filter((pl.col("p2") > 0.002) & (pl.col("p2") < 0.998)).select("rid", "s1", pl.col("label").cast(pl.Int8))
 write(build(vt, "train"), "xvt")
-te = pl.read_parquet(f"{W}/v15/test_best_s2v2_cf_final.parquet")
+te = pl.read_parquet(f"{V15}/test_best_s2v2_cf_final.parquet")
 te = te.filter(((pl.col("p2") > 0.002) & (pl.col("p2") < 0.998)) | ((pl.col("p2_raw") > 0.002) & (pl.col("p2_raw") < 0.998))).select("rid", "s1")
 write(build(te, "test"), "xtest")
 print("train", xtr.height, "vt", vt.height, "test", te.height)

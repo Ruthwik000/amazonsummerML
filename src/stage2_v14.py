@@ -215,6 +215,9 @@ def predict():
     cnt = best.join(cc, on="s1").group_by("country").len().rename({"len": "cand"}).join(nS1, on="country")
     pos, neg, r0 = meta["train_pos_per_s1"], meta["train_neg_per_s1"], float(meta["ratio"])
     cnt = cnt.with_columns(((pl.col("cand") / pl.col("n") - pos) / neg).alias("ratio_c")).with_columns((r0 / pl.col("ratio_c")).alias("k"))
+    ks = float(os.environ.get("KSCALE", "1"))   # optional extra odds factor for US and India (local harness optimum 1.5)
+    if ks != 1.0:
+        cnt = cnt.with_columns(pl.when(pl.col("country").is_in(["US", "India"])).then(pl.col("k") * ks).otherwise(pl.col("k")).alias("k"))
     log("prior adjustment per country", cnt.select("country", "ratio_c", "k").to_dicts())
     best = (best.join(cc, on="s1").join(cnt.select("country", "k"), on="country")
                 .with_columns(pl.col("p2").alias("p2_raw"),

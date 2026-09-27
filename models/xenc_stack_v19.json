@@ -1,0 +1,15 @@
+{
+ "features": "[logit p2_raw, xenc_distilbert, xenc_xlmr, logit p2*xenc_distilbert, logit p2*xenc_xlmr, logit p1]",
+ "coef": [
+  0.8923,
+  0.2677,
+  0.2443,
+  0.0128,
+  0.0213,
+  -0.1951
+ ],
+ "intercept": -0.725,
+ "negative_weight": 2.6,
+ "band": "0.002<p2<0.998",
+ "local_us_india": 0.98969
+}

@@ -1,9 +1,21 @@
-# GPU cross-encoder (plan for v17)
+# GPU cross-encoders (used by v17, v19, v20 and the final v21)
 
 **Idea.** LightGBM sees hand-made similarity features. A small transformer that reads both texts together, "name | address" of the record and of the Source-1 entity, can catch patterns the features miss: pseudo-names, partial addresses, word swaps. Its score is **stacked** with the LightGBM score p2, and only for uncertain pairs (0.002 < p2 < 0.998). Confident pairs are left unchanged.
 
 - **Model:** `distilbert-base-multilingual-cased` (Apache-2.0, 135M parameters, allowed: ≤ 8B, open licence). It is fine-tuned only on the provided train data.
 - **Hardware:** free Google Colab T4 GPU, about 1 hour. The cloud box and the user's PC VM have no GPU.
+
+## Notebooks (free Colab T4; packages in `requirements-gpu.txt`)
+| notebook | model | trains on | scores | output | used by |
+|---|---|---|---|---|---|
+| `xenc_colab.ipynb` | distilbert-base-multilingual-cased (Apache-2.0, 135M) | xtrain (T2–T4 pairs) | xvt + xtest (uncertain band) | `xenc_scores.csv.gz` | v17 → v21 |
+| `xenc2_xlmr_colab.ipynb` | xlm-roberta-base (MIT, 278M) | xtrain | xvt + xtest (+ optional xextra) | `xenc2_scores.csv.gz` | v19 → v21 |
+| `xenc3_rescue_colab.ipynb` | distilbert-base-multilingual-cased | xtrain | xextra (rescue top-5, `src/xenc_export_rescue.py`) | `xenc3_extra_scores.csv.gz` | v21 |
+
+- **Stacking:**
+  - v19: `src/xenc_stack.py` (logistic regression).
+  - v20/v21: `src/xenc_stack_gbm.py` (LightGBM + pair features, K×1.75).
+  - v21 rescue: `src/xenc_rescue.py`.
 
 ## Steps
 1. **Export pairs** (in the pipeline work dir): `python src/xenc_export.py <work> <out_dir>`
@@ -22,4 +34,10 @@
    - It keeps the v15 upward-offset cap and changes only US and India by default (`XENC_COUNTRIES`).
    - Then run the downstream steps (decoy post-filter → `france_fix2.py` → `rescue_apply.py` → `merge_countries.py`, France from v13) and the evaluation checks.
 
-**Expected gain:** unknown until the real scores arrive. A dry run with a fake signal (AUC 0.85, independent of p2) gave +0.0012 locally. A real model is correlated with p2, so expect less.
+**Result (v17):**
+- Band AUC: p2 0.9789, cross-encoder alone 0.9462, stacked 0.9878.
+- Local US+India: 0.98816 → **0.98955** (+0.0014) at K×1.5.
+- False positives: US 325 → 190, India 325 → 171.
+- Stacker coefficients: `../models/xenc_stack_v17.json`.
+- Test (label-free): about 1,900 fewer accepted +k offset pairs, with −k unchanged, so the removed pairs are decoys.
+- The Colab run took about 35 minutes on a T4. `run_v17.sh` automates everything except the Colab step.
