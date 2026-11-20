@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="790" viewBox="0 0 880 790" role="img" aria-labelledby="title desc">
+  <title id="title">Business entity resolution, final submission v21</title>
+  <desc id="desc">Normalize incoming business records and reference entities, then retrieve candidate owners by country. Rank and score retrieved owners using country-specific matchers. Rescue records with no hits using character trigram search. Select matches per reference business and export the candidate and match files.</desc>
+
+
+  <rect width="880" height="790" rx="16" fill="#f8fafb"/>
+
+  <!-- The two inputs reach the same country-scoped retrieval stage. -->
+  <g>
+    <rect x="24" y="18" width="404" height="62" rx="9" fill="#e9eff3"/>
+    <rect x="452" y="18" width="404" height="62" rx="9" fill="#e9eff3"/>
+    <text x="226" y="45" text-anchor="middle" font-size="14" font-weight="700" letter-spacing="1" font-family="Segoe UI, Arial, sans-serif" fill="#344f60">SOURCE 1</text>
+    <text x="226" y="67" text-anchor="middle" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Reference businesses</text>
+    <text x="654" y="45" text-anchor="middle" font-size="14" font-weight="700" letter-spacing="1" font-family="Segoe UI, Arial, sans-serif" fill="#344f60">SOURCES 2 AND 3</text>
+    <text x="654" y="67" text-anchor="middle" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Incoming names and addresses</text>
+    <path fill="none" stroke="#526a78" stroke-width="2" stroke-linejoin="round" d="M226 80 V96 H654 V80 M440 96 V111"/>
+    <path fill="#526a78" d="M440 111 l-5 -7 h10 Z"/>
+  </g>
+
+  <rect x="24" y="114" width="832" height="84" rx="10" fill="#19394b"/>
+  <text x="48" y="147" font-size="23" font-weight="700" font-family="Segoe UI, Arial, sans-serif" fill="white">Normalize records and retrieve candidates</text>
+  <text x="48" y="176" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#e5f0f5">Country-scoped name and address keys reduce 6.7 trillion possible pairs to 52.9 million.</text>
+
+  <path fill="none" stroke="#526a78" stroke-width="2" stroke-linejoin="round" d="M440 198 V216 H244 V236"/>
+    <path fill="#526a78" d="M244 236 l-5 -7 h10 Z"/>
+  <path fill="none" stroke="#526a78" stroke-width="2" stroke-linejoin="round" d="M440 216 H670 V236"/>
+    <path fill="#526a78" d="M670 236 l-5 -7 h10 Z"/>
+
+  <!-- The fallback starts at retrieval, before stage 1 chooses an owner. -->
+  <g>
+    <rect x="24" y="240" width="442" height="266" rx="10" fill="#e9f5f1" stroke="#a1cdbf"/>
+    <text x="46" y="267" font-size="14" font-weight="700" letter-spacing="1" font-family="Segoe UI, Arial, sans-serif" fill="#116c63">RECORDS WITH CANDIDATES</text>
+    <text x="46" y="300" font-size="23" font-weight="700" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Rank candidate owners</text>
+    <text x="46" y="327" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Keep the top LightGBM proposal if p1 ≥ 0.02.</text>
+    <path d="M46 346 H444" stroke="#b6d6cb"/>
+    <text x="46" y="374" font-size="14" font-weight="700" letter-spacing="1" font-family="Segoe UI, Arial, sans-serif" fill="#116c63">US AND INDIA</text>
+    <text x="46" y="399" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Score with the decoy-aware matcher. On uncertain</text>
+    <text x="46" y="422" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">pairs, stack DistilBERT and XLM-R with LightGBM.</text>
+    <text x="46" y="458" font-size="14" font-weight="700" letter-spacing="1" font-family="Segoe UI, Arial, sans-serif" fill="#116c63">FRANCE</text>
+    <text x="46" y="483" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Use the base matcher and French name-edit rules.</text>
+  </g>
+  <g>
+    <rect x="484" y="240" width="372" height="266" rx="10" fill="#fbf1e8" stroke="#e1bea1"/>
+    <text x="506" y="267" font-size="14" font-weight="700" letter-spacing="1" font-family="Segoe UI, Arial, sans-serif" fill="#8c461f">RECORDS WITH NO HITS</text>
+    <text x="506" y="300" font-size="23" font-weight="700" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Rescue missing candidates</text>
+    <text x="506" y="327" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">35,359 test records entered this search.</text>
+    <path d="M506 346 H834" stroke="#e8cdb7"/>
+    <text x="506" y="374" font-size="14" font-weight="700" letter-spacing="1" font-family="Segoe UI, Arial, sans-serif" fill="#8c461f">ALL COUNTRIES</text>
+    <text x="506" y="399" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Search character trigrams with TF-IDF.</text>
+    <text x="506" y="422" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Score the proposals with LightGBM.</text>
+    <text x="506" y="458" font-size="14" font-weight="700" letter-spacing="1" font-family="Segoe UI, Arial, sans-serif" fill="#8c461f">US AND INDIA</text>
+    <text x="506" y="483" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Re-rank the top five with DistilBERT.</text>
+  </g>
+
+  <path fill="none" stroke="#526a78" stroke-width="2" stroke-linejoin="round" d="M244 506 V525 H670 V506 M440 525 V541"/>
+    <path fill="#526a78" d="M440 541 l-5 -7 h10 Z"/>
+  <rect x="24" y="544" width="832" height="104" rx="10" fill="#fff" stroke="#a5b8c3"/>
+  <text x="48" y="578" font-size="23" font-weight="700" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Choose the match set for each reference business</text>
+  <text x="48" y="606" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">Adjust match odds, maximize expected F0.5, and filter decoys. An empty set is valid.</text>
+  <text x="48" y="631" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">When rescue adds a proposal, repeat selection for the affected business.</text>
+
+  <path fill="none" stroke="#526a78" stroke-width="2" stroke-linejoin="round" d="M440 648 V666 H226 V683"/>
+    <path fill="#526a78" d="M226 683 l-5 -7 h10 Z"/>
+  <path fill="none" stroke="#526a78" stroke-width="2" stroke-linejoin="round" d="M440 666 H654 V683"/>
+    <path fill="#526a78" d="M654 683 l-5 -7 h10 Z"/>
+  <rect x="24" y="687" width="404" height="80" rx="9" fill="#edf1f4"/>
+  <rect x="452" y="687" width="404" height="80" rx="9" fill="#edf1f4"/>
+  <text x="46" y="720" font-size="17" font-weight="700" font-family="Consolas, monospace" fill="#172f40">candidate_pairs.tsv</text>
+  <text x="46" y="748" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">6,892,248 pairs offered for selection</text>
+  <text x="474" y="720" font-size="17" font-weight="700" font-family="Consolas, monospace" fill="#172f40">matching_results.tsv</text>
+  <text x="474" y="748" font-size="17" font-family="Segoe UI, Arial, sans-serif" fill="#172f40">5,831,841 pairs accepted across all countries</text>
+</svg>

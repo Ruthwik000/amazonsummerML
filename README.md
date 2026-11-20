@@ -9,6 +9,12 @@ This project matches noisy business records (Source-2 and Source-3) to a referen
 - **Candidate set:** 3.98 candidates per Source-1 entity.
 - **New here?** Read [`CONTEXT.md`](CONTEXT.md) (status, plan, rules) and [`APPROACHES_AND_LESSONS.md`](APPROACHES_AND_LESSONS.md) (everything tried, what worked, what failed).
 
+## Architecture
+
+![Final v21 pipeline showing candidate retrieval, US and India text scoring, France-specific matching, rescue for records with no hits, and the two submission files.](src/docs/pipeline.svg)
+
+Each incoming record can propose one reference business. Each reference business can accept several records or return an empty match set.
+
 ## How it works (one paragraph)
 1. **Blocking.** Composite keys over name and address tokens, scoped by country, find about 50 candidate Source-1 entities per record.
 2. **Stage-1 ranker.** A LightGBM ranker keeps each record's single best candidate (p1 ≥ 0.02).
